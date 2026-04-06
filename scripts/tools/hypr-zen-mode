@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Zen mode — borderless fullscreen on current monitor, blank the other
+# Different from focus mode: no gaps, no borders, truly distraction-free
+# State tracked via /tmp/hypr-zen-mode
+
+STATE_FILE="/tmp/hypr-zen-mode"
+
+if [ -f "$STATE_FILE" ]; then
+    # ── Restore ──
+    # Parse state safely — never source from /tmp (world-writable)
+    SAVED_FOCUSED=$(grep '^SAVED_FOCUSED=' "$STATE_FILE" | cut -d= -f2)
+    SAVED_BORDER=$(grep '^SAVED_BORDER=' "$STATE_FILE" | cut -d= -f2)
+    SAVED_GAPS_IN=$(grep '^SAVED_GAPS_IN=' "$STATE_FILE" | cut -d= -f2)
+    SAVED_GAPS_OUT=$(grep '^SAVED_GAPS_OUT=' "$STATE_FILE" | cut -d= -f2)
+    SAVED_ROUNDING=$(grep '^SAVED_ROUNDING=' "$STATE_FILE" | cut -d= -f2)
+
+    # Restore fullscreen state
+    hyprctl dispatch fullscreen 0
+
+    # Restore borders and gaps
+    hyprctl keyword general:border_size "${SAVED_BORDER:-1}"
+    hyprctl keyword general:gaps_in "${SAVED_GAPS_IN:-5}"
+    hyprctl keyword general:gaps_out "${SAVED_GAPS_OUT:-5}"
+    hyprctl keyword decoration:rounding "${SAVED_ROUNDING:-0}"
+
+    # Re-enable the other monitor
+    if [ "$SAVED_FOCUSED" = "eDP-1" ]; then
+        hyprctl keyword monitor "HDMI-A-1, preferred, auto-left, 1"
+    else
+        hyprctl keyword monitor "eDP-1, preferred, auto, 1"
+    fi
+
+    rm -f "$STATE_FILE"
+    hyprctl notify 1 1500 0 "fontsize:14 Zen mode OFF"
+else
+    # ── Engage ──
+    FOCUSED=$(hyprctl activeworkspace -j | python3 -c "import sys,json; print(json.load(sys.stdin)['monitor'])")
+
+    # Save current state
+    BORDER=$(hyprctl getoption general:border_size | grep "int:" | awk '{print $2}')
+    GAPS_IN=$(hyprctl getoption general:gaps_in | grep "int:" | awk '{print $2}')
+    GAPS_OUT=$(hyprctl getoption general:gaps_out | grep "int:" | awk '{print $2}')
+    ROUNDING=$(hyprctl getoption decoration:rounding | grep "int:" | awk '{print $2}')
+
+    cat > "$STATE_FILE" << EOF
+SAVED_FOCUSED=$FOCUSED
+SAVED_BORDER=${BORDER:-1}
+SAVED_GAPS_IN=${GAPS_IN:-5}
+SAVED_GAPS_OUT=${GAPS_OUT:-5}
+SAVED_ROUNDING=${ROUNDING:-0}
+EOF
+
+    # Go zero-chrome
+    hyprctl keyword general:border_size 0
+    hyprctl keyword general:gaps_in 0
+    hyprctl keyword general:gaps_out 0
+    hyprctl keyword decoration:rounding 0
+
+    # Fullscreen
+    hyprctl dispatch fullscreen 0
+
+    # Disable other monitor
+    if [ "$FOCUSED" = "eDP-1" ]; then
+        hyprctl keyword monitor "HDMI-A-1, disable"
+    else
+        hyprctl keyword monitor "eDP-1, disable"
+    fi
+
+    hyprctl notify 1 1500 0 "fontsize:14 Zen mode ON"
+fi

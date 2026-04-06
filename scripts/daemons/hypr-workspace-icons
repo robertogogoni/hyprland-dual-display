@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Workspace icon renamer for Hyprland + split-monitor-workspaces.
+
+Sets workspace names to clean icons for waybar display:
+  - Empty workspace: just the display number (e.g. "3")
+  - Occupied workspace: icon(s) only (e.g. " 󰍡")
+  - Position in the bar already conveys workspace number
+
+Usage: hypr-workspace-icons  (runs as daemon)
+"""
+
+import json
+import os
+import signal
+import socket
+import subprocess
+from pathlib import Path
+
+PIDFILE = Path(f"/run/user/{os.getuid()}/hypr-workspace-icons.pid")
+
+# App class → Nerd Font icon mapping
+ICONS = {
+    # Terminals
+    "com.mitchellh.ghostty": "",
+    "ghostty": "",
+    "Ghostty": "",
+    "ghostty-dropterm": "",
+    "ghostty-btop": "",
+    "kitty": "",
+    "Alacritty": "",
+    "foot": "",
+    # Browsers
+    "google-chrome-canary": "",
+    "Google-chrome-canary": "",
+    "Google-chrome": "",
+    "google-chrome": "",
+    "firefox": "",
+    "Firefox": "",
+    "chromium": "",
+    "brave-browser": "",
+    # Dev
+    "Code": "󰨞",
+    "VSCodium": "󰨞",
+    "Zed": "",
+    # Chat
+    "Beeper": "󰍡",
+    "BeeperTexts": "󰍡",
+    "beeper": "󰍡",
+    "Signal": "󰈎",
+    "discord": "󰙯",
+    "Discord": "󰙯",
+    "Slack": "󰒱",
+    "WhatsApp": "",
+    "telegram": "",
+    # Media
+    "Spotify": "",
+    "spotify": "",
+    "vlc": "󰕼",
+    "mpv": "",
+    # Productivity
+    "obsidian": "󰎞",
+    "Obsidian": "󰎞",
+    "Thunderbird": "",
+    "evolution": "",
+    # Gaming
+    "Steam": "",
+    "steam": "",
+    "lutris": "🎮",
+    "Heroic": "🎮",
+    # Files
+    "org.gnome.Nautilus": "",
+    "nautilus": "",
+    "Nautilus": "",
+    "thunar": "",
+    "dolphin": "",
+    # System
+    "pavucontrol": "",
+}
+
+DEFAULT_ICON = ""
+
+WORKSPACES_PER_MONITOR = 5
+
+
+def get_clients():
+    result = subprocess.run(
+        ["hyprctl", "clients", "-j"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return []
+    return json.loads(result.stdout)
+
+
+def get_workspaces():
+    result = subprocess.run(
+        ["hyprctl", "workspaces", "-j"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return []
+    return json.loads(result.stdout)
+
+
+def rename_workspace(ws_id, name):
+    subprocess.run(
+        ["hyprctl", "dispatch", "renameworkspace", f"{ws_id} {name}"],
+        capture_output=True,
+    )
+
+
+def display_number(ws_id):
+    if ws_id <= 0:
+        return ws_id
+    return ((ws_id - 1) % WORKSPACES_PER_MONITOR) + 1
+
+
+def update_workspaces():
+    clients = get_clients()
+    workspaces = get_workspaces()
+
+    ws_icons = {}
+    for client in clients:
+        ws_id = client.get("workspace", {}).get("id", 0)
+        if ws_id <= 0:
+            continue
+        cls = client.get("class", "")
+        icon = ICONS.get(cls, DEFAULT_ICON)
+        ws_icons.setdefault(ws_id, set()).add(icon)
+
+    for ws in workspaces:
+        ws_id = ws["id"]
+        if ws_id <= 0:
+            continue
+        display_num = display_number(ws_id)
+        icons = ws_icons.get(ws_id, set())
+        if icons:
+            # Occupied: show icons only (position = number)
+            icon_str = " ".join(sorted(icons))
+            rename_workspace(ws_id, icon_str)
+        else:
+            # Empty: show the number
+            rename_workspace(ws_id, str(display_num))
+
+
+def listen_events():
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if not sig:
+        hypr_dir = f"/run/user/{os.getuid()}/hypr/"
+        if os.path.isdir(hypr_dir):
+            sigs = os.listdir(hypr_dir)
+            if sigs:
+                sig = sigs[0]
+    if not sig:
+        print("ERROR: Cannot find Hyprland instance")
+        return
+
+    socket_path = f"/run/user/{os.getuid()}/hypr/{sig}/.socket2.sock"
+
+    update_workspaces()
+
+    trigger_events = {
+        "openwindow",
+        "closewindow",
+        "movewindow",
+        "changefloatingmode",
+        "windowtitle",
+        "movewindowv2",
+        "workspace",
+        "createworkspace",
+        "destroyworkspace",
+    }
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path)
+
+    buf = b""
+    while True:
+        data = sock.recv(4096)
+        if not data:
+            break
+        buf += data
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            event = line.decode("utf-8", errors="replace").split(">>")[0]
+            if event in trigger_events:
+                update_workspaces()
+
+
+def ensure_single_instance():
+    if PIDFILE.exists():
+        try:
+            os.kill(int(PIDFILE.read_text().strip()), signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+    PIDFILE.write_text(str(os.getpid()))
+
+
+if __name__ == "__main__":
+    ensure_single_instance()
+    try:
+        listen_events()
+    except KeyboardInterrupt:
+        for ws in get_workspaces():
+            ws_id = ws["id"]
+            if ws_id > 0:
+                rename_workspace(ws_id, str(display_number(ws_id)))
+    finally:
+        PIDFILE.unlink(missing_ok=True)

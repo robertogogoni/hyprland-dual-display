@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Monitor connect/disconnect handler for split-monitor-workspaces.
+
+When HDMI disconnects: migrates TV windows (WS 6-10) to laptop equivalents.
+When HDMI reconnects: spreads them back to the TV workspaces.
+
+Runs as a daemon, listening to Hyprland IPC monitoradded/monitorremoved events.
+"""
+
+import json
+import os
+import socket
+import subprocess
+import sys
+
+# Mapping: TV workspace → laptop workspace to merge into on disconnect
+TV_TO_LAPTOP = {
+    6: 1,   # T1 (Web) → L1 (Dev)
+    7: 3,   # T2 (Media) → L3 (Work)
+    8: 3,   # T3 (Reference) → L3 (Work)
+    9: 1,   # T4 (Files) → L1 (Dev)
+    10: 5,  # T5 (Extra) → L5 (System)
+}
+
+SAVE_FILE = "/tmp/hypr-monitor-saved-layout.json"
+
+
+def get_clients():
+    result = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True)
+    return json.loads(result.stdout) if result.returncode == 0 else []
+
+
+def get_monitors():
+    result = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True)
+    return json.loads(result.stdout) if result.returncode == 0 else []
+
+
+def move_window(address, ws_id):
+    subprocess.run(
+        ["hyprctl", "dispatch", "movetoworkspacesilent", f"{ws_id},address:{address}"],
+        capture_output=True,
+    )
+
+
+def on_monitor_removed():
+    """TV disconnected — save layout and migrate windows to laptop."""
+    clients = get_clients()
+    saved = []
+
+    for c in clients:
+        ws_id = c.get("workspace", {}).get("id", 0)
+        if 6 <= ws_id <= 10:
+            addr = c["address"]
+            cls = c.get("class", "")
+            target = TV_TO_LAPTOP.get(ws_id, 1)
+            saved.append({"address": addr, "class": cls, "original_ws": ws_id})
+            move_window(addr, target)
+            print(f"  {cls}: T{ws_id-5} → L{target}")
+
+    # Save for restore
+    with open(SAVE_FILE, "w") as f:
+        json.dump(saved, f)
+
+    subprocess.run(
+        ["hyprctl", "notify", "1", "3000", "0",
+         f"fontsize:14 TV disconnected — {len(saved)} windows migrated to laptop"],
+        capture_output=True,
+    )
+
+
+def on_monitor_added():
+    """TV reconnected — restore windows to their TV workspaces."""
+    if not os.path.exists(SAVE_FILE):
+        return
+
+    with open(SAVE_FILE) as f:
+        saved = json.load(f)
+
+    clients = get_clients()
+    client_addrs = {c["address"] for c in clients}
+
+    restored = 0
+    for entry in saved:
+        if entry["address"] in client_addrs:
+            move_window(entry["address"], entry["original_ws"])
+            print(f"  {entry['class']}: → T{entry['original_ws']-5}")
+            restored += 1
+
+    os.remove(SAVE_FILE)
+
+    subprocess.run(
+        ["hyprctl", "notify", "1", "3000", "0",
+         f"fontsize:14 TV reconnected — {restored} windows restored"],
+        capture_output=True,
+    )
+
+
+def listen_events():
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if not sig:
+        hypr_dir = f"/run/user/{os.getuid()}/hypr/"
+        if os.path.isdir(hypr_dir):
+            sigs = os.listdir(hypr_dir)
+            if sigs:
+                sig = sigs[0]
+    if not sig:
+        print("ERROR: Cannot find Hyprland instance", file=sys.stderr)
+        sys.exit(1)
+
+    socket_path = f"/run/user/{os.getuid()}/hypr/{sig}/.socket2.sock"
+    print(f"Monitor handler started (PID {os.getpid()})")
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path)
+
+    buf = b""
+    while True:
+        data = sock.recv(4096)
+        if not data:
+            break
+        buf += data
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            decoded = line.decode("utf-8", errors="replace")
+            if decoded.startswith("monitorremoved>>"):
+                monitor = decoded.split(">>", 1)[1].strip()
+                if "HDMI" in monitor:
+                    print(f"HDMI disconnected: {monitor}")
+                    on_monitor_removed()
+            elif decoded.startswith("monitoradded>>"):
+                monitor = decoded.split(">>", 1)[1].strip()
+                if "HDMI" in monitor:
+                    print(f"HDMI reconnected: {monitor}")
+                    # Wait for monitor to initialize
+                    import time; time.sleep(2)
+                    on_monitor_added()
+
+
+def ensure_single_instance():
+    import signal
+    from pathlib import Path
+    pidfile = Path("/tmp/hypr-monitor-handler.pid")
+    if pidfile.exists():
+        try:
+            os.kill(int(pidfile.read_text().strip()), signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+    pidfile.write_text(str(os.getpid()))
+
+
+if __name__ == "__main__":
+    from pathlib import Path as _Path
+    ensure_single_instance()
+    try:
+        listen_events()
+    except KeyboardInterrupt:
+        print("\nMonitor handler stopped.")
+    finally:
+        _Path("/tmp/hypr-monitor-handler.pid").unlink(missing_ok=True)

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# hypr-test-resolution — safely test a Hyprland monitor resolution with auto-revert
+#
+# Usage: hypr-test-resolution <monitor> <resolution> [position] [timeout]
+# Example: hypr-test-resolution HDMI-A-1 1920x1080@60 auto-left 10
+#
+# If no confirmation within timeout, reverts to previous settings.
+
+set -euo pipefail
+
+MONITOR="${1:?Usage: hypr-test-resolution <monitor> <resolution> [position] [timeout]}"
+NEW_RES="${2:?Usage: hypr-test-resolution <monitor> <resolution> [position] [timeout]}"
+POSITION="${3:-auto-left}"
+TIMEOUT="${4:-12}"
+
+# Capture current state
+CURRENT=$(hyprctl monitors -j | python3 -c "
+import json, sys
+monitors = json.load(sys.stdin)
+for m in monitors:
+    if m['name'] == '$MONITOR':
+        w, h = m['width'], m['height']
+        r = m['refreshRate']
+        x, y = m['x'], m['y']
+        print(f'{w}x{h}@{r:.0f},{x},{y}')
+        sys.exit(0)
+print('NOT_FOUND')
+")
+
+if [ "$CURRENT" = "NOT_FOUND" ]; then
+    echo "Monitor $MONITOR not found in current session."
+    echo "Available monitors:"
+    hyprctl monitors -j | python3 -c "
+import json, sys
+for m in json.load(sys.stdin):
+    print(f'  {m[\"name\"]} — {m[\"width\"]}x{m[\"height\"]}')
+"
+    exit 1
+fi
+
+OLD_RES=$(echo "$CURRENT" | cut -d, -f1)
+OLD_X=$(echo "$CURRENT" | cut -d, -f2)
+OLD_Y=$(echo "$CURRENT" | cut -d, -f3)
+
+echo "╭─ Resolution Test ─────────────────────────────╮"
+echo "│ Monitor:  $MONITOR"
+echo "│ Current:  $OLD_RES at ${OLD_X},${OLD_Y}"
+echo "│ Testing:  $NEW_RES at $POSITION"
+echo "│ Timeout:  ${TIMEOUT}s (auto-revert if not confirmed)"
+echo "╰────────────────────────────────────────────────╯"
+echo ""
+
+# Apply new resolution
+echo ">>> Applying $NEW_RES..."
+hyprctl keyword monitor "$MONITOR,$NEW_RES,$POSITION,1"
+sleep 1
+
+echo ""
+echo "╭─ CONFIRM OR REVERT ────────────────────────────╮"
+echo "│ Press ENTER to KEEP this resolution.            │"
+echo "│ Or wait ${TIMEOUT}s for automatic revert.             │"
+echo "╰────────────────────────────────────────────────╯"
+
+# Wait for confirmation or timeout
+if read -t "$TIMEOUT" -r _confirm; then
+    echo ""
+    echo "Confirmed! Keeping $NEW_RES on $MONITOR."
+    echo ""
+    echo "To make this permanent, update ~/.config/hypr/monitors.conf:"
+    echo "  monitor=$MONITOR,$NEW_RES,$POSITION,1"
+else
+    echo ""
+    echo ">>> No confirmation — reverting to $OLD_RES..."
+    hyprctl keyword monitor "$MONITOR,$OLD_RES,${OLD_X} ${OLD_Y},1"
+    sleep 1
+    echo "Reverted to $OLD_RES."
+fi

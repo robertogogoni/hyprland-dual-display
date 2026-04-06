@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Reorganize all windows into their correct smart workspaces.
+
+Scans every open window, categorizes it using the same logic as
+hypr-smart-workspace, and silently moves it to the right workspace.
+Skips scratchpad and special workspace windows.
+
+Usage: hypr-reorganize  (one-shot, bound to SUPER+SHIFT+F1)
+"""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+# Same categories as hypr-smart-workspace (single source of truth)
+CATEGORIES = {
+    "dev":   {"ws": 1, "keywords": [
+        "terminal","term","console","ghostty","kitty","alacritty","foot","wezterm",
+        "xterm","urxvt","code","vscodium","vscode","sublime","zed","neovim","nvim",
+        "vim","emacs","helix","jetbrains","intellij","pycharm","webstorm","goland",
+        "clion","rider","rustrover","android-studio","gitk","gitkraken","lazygit",
+        "postman","insomnia","docker","lazydocker","portainer",
+    ]},
+    "chat":  {"ws": 2, "keywords": [
+        "beeper","beepertexts","signal","discord","slack","telegram","whatsapp",
+        "element","matrix","teams","skype","zoom","webex","jitsi","meet",
+        "thunderbird","geary","mailspring","irc","hexchat","weechat","pidgin",
+        "messenger","chat","message","claude",
+    ]},
+    "work":  {"ws": 3, "keywords": [
+        "obsidian","notion","logseq","joplin","libreoffice","soffice","writer",
+        "calc","impress","onlyoffice","figma","canva","inkscape","gimp","krita",
+        "blender","kdenlive","shotcut","davinci","trello","asana","clickup",
+        "linear","calendar","evolution","typora","marktext","ghostwriter",
+    ]},
+    "games": {"ws": 4, "keywords": [
+        "steam","lutris","heroic","bottles","wine","gamemode","minecraft",
+        "retroarch","dolphin-emu","ppsspp","proton","itch",
+    ]},
+    "system":{"ws": 5, "keywords": [
+        "btop","htop","nvtop","gotop","pavucontrol","pulseaudio","pipewire",
+        "helvum","blueman","bluetooth","nm-connection","gnome-control","settings",
+        "systemsettings","gparted","disks","baobab","timeshift","nwg-look",
+        "lxappearance","qt5ct","qt6ct","gnome-tweaks","dconf","cpu-x","hardinfo",
+        "firewall","gufw",
+    ]},
+    "web":   {"ws": 6, "keywords": [
+        "firefox","chrome","chromium","brave","vivaldi","opera","edge","epiphany",
+        "tor-browser","librewolf","waterfox","zen","qutebrowser","browser",
+    ]},
+    "media": {"ws": 7, "keywords": [
+        "spotify","rhythmbox","lollypop","amberol","vlc","mpv","celluloid",
+        "totem","audacity","ardour","lmms","obs","obs-studio","easyeffects",
+        "music","player","media",
+    ]},
+    "ref":   {"ws": 8, "keywords": [
+        "evince","okular","zathura","sioyek","mupdf","xreader","atril",
+        "calibre","foliate","pdf","epub","reader","viewer","devdocs","devhelp",
+    ]},
+    "files": {"ws": 9, "keywords": [
+        "nautilus","thunar","dolphin","nemo","caja","pcmanfm","ranger","lf",
+        "nnn","yazi","file-roller","ark","engrampa","transmission","deluge",
+        "qbittorrent","filezilla","torrent",
+    ]},
+}
+
+IGNORE_CLASSES = {
+    "ghostty-dropterm", "ghostty-btop", "hypr-cheatsheet",
+    "xdg-desktop-portal-gtk", "xdg-desktop-portal",
+    "polkit", "gcr-prompter",
+}
+
+CACHE_PATH = Path.home() / ".config" / "hypr" / "smart-workspace-cache.json"
+
+
+def load_cache():
+    if CACHE_PATH.exists():
+        try:
+            return json.loads(CACHE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def categorize(window_class, window_title):
+    cls_lower = window_class.lower()
+    title_lower = window_title.lower()
+
+    if window_class in IGNORE_CLASSES or cls_lower in IGNORE_CLASSES:
+        return None
+
+    cache = load_cache()
+    if cls_lower in cache:
+        return cache[cls_lower]
+
+    for cat in CATEGORIES.values():
+        for kw in cat["keywords"]:
+            if kw in cls_lower:
+                return cat["ws"]
+
+    for cat in CATEGORIES.values():
+        for kw in cat["keywords"]:
+            if kw in title_lower:
+                return cat["ws"]
+
+    return None
+
+
+def main():
+    result = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True)
+    clients = json.loads(result.stdout)
+
+    moved = 0
+    skipped = 0
+    for c in clients:
+        ws_id = c.get("workspace", {}).get("id", 0)
+        if ws_id <= 0:  # skip special/scratchpad
+            continue
+
+        cls = c.get("class", "")
+        title = c.get("title", "")
+        addr = c.get("address", "")
+        target = categorize(cls, title)
+
+        if target is None or target == ws_id:
+            skipped += 1
+            continue
+
+        subprocess.run(
+            ["hyprctl", "dispatch", "movetoworkspacesilent", f"{target},address:{addr}"],
+            capture_output=True,
+        )
+        src = f"L{ws_id}" if ws_id <= 5 else f"T{ws_id - 5}"
+        dst = f"L{target}" if target <= 5 else f"T{target - 5}"
+        print(f"  {cls:<30} {src} → {dst}")
+        moved += 1
+
+    # Send notification
+    subprocess.run(
+        ["hyprctl", "notify", "1", "3000", "0",
+         f"fontsize:14 Reorganized {moved} windows ({skipped} already correct)"],
+        capture_output=True,
+    )
+    print(f"\nDone: {moved} moved, {skipped} already correct")
+
+
+if __name__ == "__main__":
+    main()

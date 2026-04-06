@@ -1,0 +1,19 @@
+# Backup files
+*.bak
+*.bak.*
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+smart-workspace-cache.json
+__pycache__/
+*.pyc

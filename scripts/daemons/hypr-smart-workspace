@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""Smart workspace auto-categorization daemon for Hyprland.
+
+Listens for new windows and automatically moves them to the right workspace
+based on intelligent keyword matching on window class, title, and process name.
+Learns unknown apps and caches decisions for instant recall.
+
+Works with split-monitor-workspaces plugin (5 per monitor):
+  Laptop (eDP-1): WS 1-5   →  L1=Dev, L2=Chat, L3=Work, L4=Games, L5=System
+  TV (HDMI-A-1):  WS 6-10  →  T1=Web, T2=Media, T3=Reference, T4=Files, T5=Extra
+
+Usage: hypr-smart-workspace  (runs as daemon)
+"""
+
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+# ── Workspace Categories ────────────────────────────────────────
+# Each category has: workspace ID, keywords that match class/title
+CATEGORIES = {
+    "dev": {
+        "ws": 1,
+        "keywords": [
+            "terminal", "term", "console", "ghostty", "kitty", "alacritty",
+            "foot", "wezterm", "xterm", "urxvt", "sakura", "tilix",
+            "code", "vscodium", "vscode", "sublime", "atom", "zed",
+            "neovim", "nvim", "vim", "emacs", "helix",
+            "jetbrains", "intellij", "pycharm", "webstorm", "goland",
+            "clion", "rider", "rustrover", "android-studio",
+            "gitk", "git-gui", "gitkraken", "lazygit",
+            "postman", "insomnia", "httpie",
+            "docker", "lazydocker", "portainer",
+        ],
+    },
+    "chat": {
+        "ws": 2,
+        "keywords": [
+            "beeper", "beepertexts", "signal", "discord", "slack",
+            "telegram", "whatsapp", "element", "matrix", "teams",
+            "skype", "zoom", "webex", "jitsi", "meet",
+            "thunderbird", "geary", "mailspring",
+            "irc", "hexchat", "weechat", "pidgin",
+            "messenger", "chat", "message",
+            "claude",
+        ],
+    },
+    "work": {
+        "ws": 3,
+        "keywords": [
+            "obsidian", "notion", "logseq", "joplin", "simplenote",
+            "libreoffice", "soffice", "writer", "calc", "impress",
+            "onlyoffice", "wps", "abiword", "gnumeric",
+            "figma", "canva", "inkscape", "gimp", "krita",
+            "blender", "kdenlive", "shotcut", "davinci",
+            "trello", "asana", "clickup", "linear",
+            "calendar", "evolution",
+            "typora", "marktext", "ghostwriter",
+        ],
+    },
+    "games": {
+        "ws": 4,
+        "keywords": [
+            "steam", "lutris", "heroic", "bottles", "wine",
+            "gamemode", "mangohud", "gamescope",
+            "minecraft", "retroarch", "dolphin-emu", "ppsspp",
+            "proton", "itch",
+        ],
+    },
+    "system": {
+        "ws": 5,
+        "keywords": [
+            "btop", "htop", "nvtop", "gotop", "bashtop",
+            "pavucontrol", "pulseaudio", "pipewire", "helvum",
+            "blueman", "bluetooth", "nm-connection",
+            "gnome-control", "settings", "systemsettings",
+            "gparted", "disks", "baobab",
+            "timeshift", "backintime",
+            "nwg-look", "lxappearance", "qt5ct", "qt6ct",
+            "gnome-tweaks", "dconf",
+            "cpu-x", "hardinfo", "inxi",
+            "firewall", "gufw",
+        ],
+    },
+    "web": {
+        "ws": 6,
+        "keywords": [
+            "firefox", "chrome", "chromium", "brave",
+            "vivaldi", "opera", "edge", "epiphany",
+            "tor-browser", "librewolf", "waterfox", "zen",
+            "qutebrowser", "surf", "nyxt",
+            "browser",
+        ],
+    },
+    "media": {
+        "ws": 7,
+        "keywords": [
+            "spotify", "rhythmbox", "lollypop", "amberol",
+            "vlc", "mpv", "celluloid", "totem",
+            "audacity", "ardour", "lmms",
+            "obs", "obs-studio", "streamlabs",
+            "easyeffects", "carla",
+            "youtube", "netflix", "plex", "jellyfin",
+            "music", "player", "media",
+        ],
+    },
+    "reference": {
+        "ws": 8,
+        "keywords": [
+            "evince", "okular", "zathura", "sioyek", "mupdf",
+            "xreader", "atril", "qpdfview",
+            "calibre", "foliate",
+            "pdf", "epub", "reader", "viewer",
+            "devdocs", "devhelp", "info",
+        ],
+    },
+    "files": {
+        "ws": 9,
+        "keywords": [
+            "nautilus", "thunar", "dolphin", "nemo", "caja",
+            "pcmanfm", "ranger", "lf", "nnn", "yazi",
+            "file-roller", "ark", "engrampa",
+            "transmission", "deluge", "qbittorrent",
+            "filezilla", "winscp",
+            "file", "manager", "torrent",
+        ],
+    },
+}
+
+# Classes to completely ignore (scratchpads, popups, etc.)
+IGNORE_CLASSES = {
+    "ghostty-dropterm", "ghostty-btop", "hypr-cheatsheet",
+    "xdg-desktop-portal-gtk", "xdg-desktop-portal",
+    "polkit", "gcr-prompter",
+}
+
+CACHE_PATH = Path.home() / ".config" / "hypr" / "smart-workspace-cache.json"
+
+
+def load_cache():
+    """Load learned app→category mappings."""
+    if CACHE_PATH.exists():
+        try:
+            return json.loads(CACHE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_cache(cache):
+    """Persist learned mappings."""
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CACHE_PATH.write_text(json.dumps(cache, indent=2, sort_keys=True))
+
+
+def categorize(window_class, window_title):
+    """Determine which workspace a window belongs to.
+
+    Returns workspace ID (1-10) or None to leave it alone.
+    Strategy:
+      1. Check ignore list
+      2. Check learned cache (instant)
+      3. Keyword match against class name (fast)
+      4. Keyword match against title (fallback)
+      5. Unknown → return None (leave where it is)
+    """
+    cls_lower = window_class.lower()
+    title_lower = window_title.lower()
+
+    # 1. Ignore list
+    if window_class in IGNORE_CLASSES or cls_lower in IGNORE_CLASSES:
+        return None
+
+    # 2. Check cache
+    cache = load_cache()
+    if cls_lower in cache:
+        return cache[cls_lower]
+
+    # 3. Keyword match on class
+    for cat_name, cat in CATEGORIES.items():
+        for kw in cat["keywords"]:
+            if kw in cls_lower:
+                # Cache for future instant recall
+                cache[cls_lower] = cat["ws"]
+                save_cache(cache)
+                return cat["ws"]
+
+    # 4. Keyword match on title
+    for cat_name, cat in CATEGORIES.items():
+        for kw in cat["keywords"]:
+            if kw in title_lower:
+                cache[cls_lower] = cat["ws"]
+                save_cache(cache)
+                return cat["ws"]
+
+    # 5. Unknown — leave it where Hyprland put it
+    return None
+
+
+def get_client_by_address(addr):
+    """Get client info by Hyprland address."""
+    result = subprocess.run(
+        ["hyprctl", "clients", "-j"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return None
+    for client in json.loads(result.stdout):
+        # Address formats vary: "0x..." in clients, just hex in events
+        client_addr = client.get("address", "").replace("0x", "")
+        if client_addr == addr.replace("0x", ""):
+            return client
+    return None
+
+
+def move_to_workspace(address, ws_id):
+    """Move a window to the target workspace silently."""
+    subprocess.run(
+        ["hyprctl", "dispatch", "movetoworkspacesilent",
+         f"{ws_id},address:0x{address.replace('0x', '')}"],
+        capture_output=True,
+    )
+
+
+def handle_open_window(event_data):
+    """Process a new window event and categorize it.
+
+    Event format: openwindow>>ADDRESS,WORKSPACE,CLASS,TITLE
+    """
+    parts = event_data.split(",", 3)
+    if len(parts) < 3:
+        return
+
+    address = parts[0]
+    # workspace_name = parts[1]  # not used
+    window_class = parts[2]
+    window_title = parts[3] if len(parts) > 3 else ""
+
+    target_ws = categorize(window_class, window_title)
+    if target_ws is not None:
+        move_to_workspace(address, target_ws)
+
+
+def listen_events():
+    """Listen to Hyprland IPC and handle window events."""
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if not sig:
+        hypr_dir = f"/run/user/{os.getuid()}/hypr/"
+        if os.path.isdir(hypr_dir):
+            sigs = os.listdir(hypr_dir)
+            if sigs:
+                sig = sigs[0]
+    if not sig:
+        print("ERROR: Cannot find Hyprland instance", file=sys.stderr)
+        sys.exit(1)
+
+    socket_path = f"/run/user/{os.getuid()}/hypr/{sig}/.socket2.sock"
+
+    print(f"Smart workspace daemon started (PID {os.getpid()})")
+    print(f"Listening on {socket_path}")
+    print(f"Cache: {CACHE_PATH}")
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path)
+
+    buf = b""
+    while True:
+        data = sock.recv(4096)
+        if not data:
+            break
+        buf += data
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            decoded = line.decode("utf-8", errors="replace")
+            if decoded.startswith("openwindow>>"):
+                event_data = decoded.split(">>", 1)[1]
+                try:
+                    handle_open_window(event_data)
+                except Exception as e:
+                    print(f"Error handling window: {e}", file=sys.stderr)
+
+
+def ensure_single_instance():
+    """Kill any existing instance before starting."""
+    import signal
+    pidfile = Path("/tmp/hypr-smart-workspace.pid")
+    if pidfile.exists():
+        try:
+            old_pid = int(pidfile.read_text().strip())
+            os.kill(old_pid, signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+    pidfile.write_text(str(os.getpid()))
+
+
+if __name__ == "__main__":
+    ensure_single_instance()
+    try:
+        listen_events()
+    except KeyboardInterrupt:
+        print("\nSmart workspace daemon stopped.")
+    finally:
+        Path("/tmp/hypr-smart-workspace.pid").unlink(missing_ok=True)

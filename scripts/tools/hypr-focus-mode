@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Focus mode toggle — fullscreen current window + dim other monitor
+# Press again to restore. State tracked via /tmp/hypr-focus-mode
+
+STATE_FILE="/tmp/hypr-focus-mode"
+
+if [ -f "$STATE_FILE" ]; then
+    # ── Restore ──
+    # Unset fullscreen
+    hyprctl dispatch fullscreen 0
+
+    # Restore other monitor
+    hyprctl keyword monitor "HDMI-A-1, preferred, auto-left, 1"
+
+    # Restore gaps if they were on
+    hyprctl keyword general:gaps_out "$(cat "$STATE_FILE" 2>/dev/null || echo "5")"
+
+    rm -f "$STATE_FILE"
+    hyprctl notify 1 2000 0 "fontsize:14 Focus mode OFF"
+else
+    # ── Engage ──
+    # Save current gaps
+    hyprctl getoption general:gaps_out | grep "int:" | awk '{print $2}' > "$STATE_FILE"
+
+    # Fullscreen current window
+    hyprctl dispatch fullscreen 0
+
+    # Disable other monitor (turn it off)
+    FOCUSED=$(hyprctl activeworkspace -j | python3 -c "import sys,json; print(json.load(sys.stdin)['monitor'])")
+    if [ "$FOCUSED" = "eDP-1" ]; then
+        hyprctl keyword monitor "HDMI-A-1, disable"
+    else
+        hyprctl keyword monitor "eDP-1, disable"
+    fi
+
+    hyprctl notify 1 2000 0 "fontsize:14 Focus mode ON"
+fi

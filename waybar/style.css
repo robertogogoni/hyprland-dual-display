@@ -1,0 +1,246 @@
+/* Omarchy theme import — provides @background and @foreground CSS vars.
+   Remove this line if not using Omarchy, and define the colors directly:
+   @define-color background #0d1117;
+   @define-color foreground #cdd6f4;  */
+@import "../omarchy/current/theme/waybar.css";
+
+* {
+  background-color: @background;
+  color: @foreground;
+
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  font-family: 'JetBrainsMono Nerd Font';
+  font-size: 12px;
+}
+
+window#waybar {
+  background-color: rgba(13, 17, 23, 0.95);
+  border-bottom: 1px solid rgba(89, 180, 250, 0.3);
+}
+
+/* TV bar: bigger everything for 1080p at viewing distance */
+window#waybar.tv * {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+window#waybar.tv #workspaces button {
+  font-size: 15px;
+  font-weight: bold;
+  padding: 0 10px;
+  min-width: 24px;
+}
+
+window#waybar.tv #window {
+  font-size: 13px;
+}
+
+window#waybar.tv #custom-media {
+  font-size: 13px;
+}
+
+window#waybar.tv #custom-update {
+  font-size: 12px;
+}
+
+window#waybar.tv #custom-screenrecording-indicator,
+window#waybar.tv #custom-idle-indicator,
+window#waybar.tv #custom-notification-silencing-indicator {
+  font-size: 12px;
+}
+
+window#waybar.tv #custom-sync-status {
+  font-size: 15px;
+}
+
+window#waybar.tv #custom-ai-usage {
+  font-size: 16px;
+}
+
+window#waybar.tv #custom-pomodoro {
+  font-size: 14px;
+}
+
+.modules-left {
+  margin-left: 8px;
+}
+
+.modules-right {
+  margin-right: 8px;
+}
+
+#workspaces button {
+  all: initial;
+  padding: 0 7px;
+  margin: 0 1px;
+  min-width: 18px;
+  font-size: 11px;
+  font-weight: bold;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+#workspaces button.empty {
+  opacity: 0.4;
+}
+
+#workspaces button.active {
+  opacity: 1;
+  border-bottom-style: solid;
+}
+
+#workspaces button:hover {
+  opacity: 0.85;
+}
+
+/* Vivid per-workspace colors */
+#workspaces button:nth-child(1)        { color: #f38ba8; }
+#workspaces button:nth-child(1).active { border-bottom-color: #f38ba8; }
+#workspaces button:nth-child(2)        { color: #fab387; }
+#workspaces button:nth-child(2).active { border-bottom-color: #fab387; }
+#workspaces button:nth-child(3)        { color: #a6e3a1; }
+#workspaces button:nth-child(3).active { border-bottom-color: #a6e3a1; }
+#workspaces button:nth-child(4)        { color: #89b4fa; }
+#workspaces button:nth-child(4).active { border-bottom-color: #89b4fa; }
+#workspaces button:nth-child(5)        { color: #cba6f7; }
+#workspaces button:nth-child(5).active { border-bottom-color: #cba6f7; }
+
+#cpu,
+#battery,
+#pulseaudio,
+#custom-omarchy,
+#custom-update {
+  min-width: 12px;
+  margin: 0 7.5px;
+}
+
+#tray {
+  margin-right: 16px;
+}
+
+#bluetooth {
+  margin-right: 17px;
+}
+
+#network {
+  margin-right: 13px;
+}
+
+#custom-expand-icon {
+  margin-right: 18px;
+}
+
+tooltip {
+  padding: 2px;
+}
+
+#custom-update {
+  font-size: 10px;
+}
+
+#taskbar button {
+  all: initial;
+  padding: 0 4px;
+  margin: 0 1px;
+  opacity: 0.7;
+}
+
+#taskbar button.active {
+  opacity: 1;
+  border-bottom: 2px solid #89dceb;
+}
+
+#taskbar button:hover {
+  opacity: 1;
+}
+
+#window {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-right: 12px;
+}
+
+#custom-media {
+  font-size: 11px;
+  opacity: 0.7;
+  margin: 0 10px;
+  color: #a6e3a1;
+}
+
+#custom-pomodoro {
+  font-size: 12px;
+  margin: 0 8px;
+}
+#custom-pomodoro.idle { color: #585b70; }
+#custom-pomodoro.active { color: #f38ba8; font-weight: bold; }
+
+#clock {
+  margin-left: 8.75px;
+}
+
+.hidden {
+  opacity: 0;
+}
+
+#custom-screenrecording-indicator,
+#custom-idle-indicator,
+#custom-notification-silencing-indicator {
+  min-width: 12px;
+  margin-left: 5px;
+  margin-right: 0;
+  font-size: 10px;
+  padding-bottom: 1px;
+}
+
+#custom-screenrecording-indicator.active {
+  color: #a55555;
+}
+
+#custom-idle-indicator.active,
+#custom-notification-silencing-indicator.active {
+  color: #a55555;
+}
+
+#custom-voxtype {
+  min-width: 12px;
+  margin: 0 0 0 7.5px;
+}
+
+#custom-voxtype.recording {
+  color: #a55555;
+}
+
+/* ===== Claude Sync ===== */
+
+#custom-sync-status {
+  padding: 0 6px;
+  font-size: 13px;
+}
+
+#custom-sync-status.sync-ok { color: #a6e3a1; }
+#custom-sync-status.sync-active { color: #89b4fa; }
+#custom-sync-status.sync-warn { color: #FFC107; }
+#custom-sync-status.sync-off { color: #585b70; }
+#custom-sync-status:hover { color: #e68e0d; }
+
+
+/* ===== AI Usage ===== */
+
+#custom-ai-usage {
+  padding: 0 10px;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+#custom-ai-usage.ai-ok { color: #a6e3a1; }
+#custom-ai-usage.ai-warn { color: #FFC107; }
+#custom-ai-usage.ai-crit { color: #D35F5F; }
+#custom-ai-usage:hover { color: #e68e0d; }
+
+/* Light theme overrides */
+#custom-ai-usage.ai-usage-light.ai-ok { color: #40a02b; }
+#custom-ai-usage.ai-usage-light.ai-warn { color: #df8e1d; }
+#custom-ai-usage.ai-usage-light.ai-crit { color: #d20f39; }
+#custom-ai-usage.ai-usage-light:hover { color: #fe640b; }

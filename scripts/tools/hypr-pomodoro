@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Pomodoro timer for waybar — click to start/stop, shows countdown
+# Output format: JSON for waybar custom module
+
+STATE_FILE="/tmp/hypr-pomodoro"
+DURATION=1500  # 25 minutes in seconds
+
+PID_FILE="/tmp/hypr-pomodoro.pid"
+
+if [ "$1" = "toggle" ]; then
+    if [ -f "$STATE_FILE" ]; then
+        # Stop timer — kill the background countdown process
+        if [ -f "$PID_FILE" ]; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null
+            rm -f "$PID_FILE"
+        fi
+        rm -f "$STATE_FILE"
+    else
+        # Start timer
+        echo "$(date +%s)" > "$STATE_FILE"
+        notify-send "Pomodoro" "25 minute timer started" -u normal -t 3000
+        # Run countdown in background, save PID for cancellation
+        (
+            sleep 1500
+            if [ -f "$STATE_FILE" ]; then
+                rm -f "$STATE_FILE" "$PID_FILE"
+                notify-send "Pomodoro" "Time is up! Take a break." -u critical -t 10000
+                paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null
+            fi
+        ) &>/dev/null &
+        echo $! > "$PID_FILE"
+    fi
+    pkill -RTMIN+12 waybar 2>/dev/null
+    exit 0
+fi
+
+# ── Status output for waybar ──
+if [ -f "$STATE_FILE" ]; then
+    START=$(cat "$STATE_FILE")
+    NOW=$(date +%s)
+    ELAPSED=$((NOW - START))
+    REMAINING=$((DURATION - ELAPSED))
+
+    if [ "$REMAINING" -le 0 ]; then
+        rm -f "$STATE_FILE"
+        echo '{"text": "", "class": "idle", "tooltip": "Click to start 25min timer"}'
+        exit 0
+    fi
+
+    MINS=$((REMAINING / 60))
+    SECS=$((REMAINING % 60))
+    printf '{"text": "%02d:%02d", "class": "active", "tooltip": "Pomodoro running — click to cancel"}\n' "$MINS" "$SECS"
+else
+    echo '{"text": "", "class": "idle", "tooltip": "Click to start 25min timer"}'
+fi
