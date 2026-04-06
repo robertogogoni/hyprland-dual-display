@@ -17,7 +17,15 @@ Each layer stands on its own. Use what you need.
 
 <!-- screenshots -->
 <p align="center">
-  <em>Screenshots coming soon: dual waybar, workspace colors, zen mode</em>
+  <strong>Laptop (eDP-1, 768p, 26px bar)</strong><br>
+  <img src="assets/laptop-waybar-crop.png" alt="Laptop waybar with L1-L5 workspace buttons" width="100%">
+</p>
+<p align="center">
+  <strong>TV (HDMI-A-1, 1080p, 38px bar)</strong><br>
+  <img src="assets/tv-waybar-crop.png" alt="TV waybar with T1-T5 workspace buttons" width="100%">
+</p>
+<p align="center">
+  <img src="assets/dual-display-overview.png" alt="Both displays side by side" width="100%">
 </p>
 
 ---
